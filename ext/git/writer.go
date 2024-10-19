@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/argoproj-labs/argocd-image-updater/pkg/log"
@@ -60,7 +61,7 @@ func (m *nativeGitClient) Commit(pathSpec string, opts *CommitOptions) error {
 
 	out, err := m.runCmd(args...)
 	if err != nil {
-		log.Errorf(out)
+		log.Errorf("%s %v", out, err)
 		return err
 	}
 
@@ -158,4 +159,38 @@ func (m *nativeGitClient) runCredentialedCmdWithOutput(args ...string) (string, 
 	cmd := exec.Command("git", args...)
 	cmd.Env = append(cmd.Env, environ...)
 	return m.runCmdOutput(cmd, runOpts{})
+}
+
+func (m *nativeGitClient) shallowFetch(revision string, depth int) error {
+	var err error
+	if revision != "" {
+		err = m.runCredentialedCmd("fetch", "origin", revision, "--force", "--prune", "--depth", strconv.Itoa(depth))
+	} else {
+		err = m.runCredentialedCmd("fetch", "origin", "--force", "--prune", "--depth", strconv.Itoa(depth))
+	}
+	return err
+}
+
+// Fetch fetches latest updates from origin
+func (m *nativeGitClient) ShallowFetch(revision string, depth int) error {
+	if m.OnFetch != nil {
+		done := m.OnFetch(m.repoURL)
+		defer done()
+	}
+
+	err := m.shallowFetch(revision, depth)
+
+	// When we have LFS support enabled, check for large files and fetch them too.
+	// No shallow fetch is possible here
+	if err == nil && m.IsLFSEnabled() {
+		largeFiles, err := m.LsLargeFiles()
+		if err == nil && len(largeFiles) > 0 {
+			err = m.runCredentialedCmd("lfs", "fetch", "--all")
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return err
 }

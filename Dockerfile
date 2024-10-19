@@ -1,4 +1,4 @@
-FROM golang:1.22 AS builder
+FROM golang:1.23 AS builder
 
 RUN mkdir -p /src/argocd-image-updater
 WORKDIR /src/argocd-image-updater
@@ -10,7 +10,7 @@ COPY . .
 RUN mkdir -p dist && \
 	make controller
 
-FROM alpine:3.19
+FROM alpine:3.20
 
 RUN apk update && \
     apk upgrade && \

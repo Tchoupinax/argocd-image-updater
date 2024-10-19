@@ -157,10 +157,6 @@ func commitChangesGit(app *v1alpha1.Application, wbc *WriteBackConfig, changeLis
 	if err != nil {
 		return err
 	}
-	err = gitC.Fetch("")
-	if err != nil {
-		return err
-	}
 
 	// Set username and e-mail address used to identify the commiter
 	if wbc.GitCommitUser != "" && wbc.GitCommitEmail != "" {
@@ -185,6 +181,10 @@ func commitChangesGit(app *v1alpha1.Application, wbc *WriteBackConfig, changeLis
 		if err != nil {
 			return err
 		}
+	}
+	err = gitC.ShallowFetch(checkOutBranch, 1)
+	if err != nil {
+		return err
 	}
 
 	// The push branch is by default the same as the checkout branch, unless
@@ -246,7 +246,7 @@ func commitChangesGit(app *v1alpha1.Application, wbc *WriteBackConfig, changeLis
 	if err != nil {
 		return err
 	}
-	err = gitC.Push("origin", pushBranch, false)
+	err = gitC.Push("origin", pushBranch, pushBranch != checkOutBranch)
 	if err != nil {
 		return err
 	}
@@ -329,40 +329,51 @@ func writeKustomization(app *v1alpha1.Application, wbc *WriteBackConfig, gitC gi
 		return err, false
 	}
 
-	if err = updateKustomizeFile(filterFunc, kustFile); err != nil {
-		return err, false
-	}
-
-	return nil, false
+	return updateKustomizeFile(filterFunc, kustFile)
 }
 
 // updateKustomizeFile reads the kustomization file at path, applies the filter to it, and writes the result back
 // to the file. This is the same behavior as kyaml.UpdateFile, but it preserves the original order
 // of YAML fields to minimize git diffs.
-func updateKustomizeFile(filter kyaml.Filter, path string) error {
+func updateKustomizeFile(filter kyaml.Filter, path string) (error, bool) {
 	// Read the yaml
 	y, err := kyaml.ReadFile(path)
 	if err != nil {
-		return err
+		return err, false
+	}
+
+	originalData, err := y.String()
+	if err != nil {
+		return err, false
 	}
 
 	// Update the yaml
 	yCpy := y.Copy()
 	if err := yCpy.PipeE(filter); err != nil {
-		return err
+		return err, false
 	}
 
 	// Preserve the original order of fields
 	if err := order.SyncOrder(y, yCpy); err != nil {
-		return err
+		return err, false
+	}
+
+	override, err := yCpy.String()
+	if err != nil {
+		return err, false
+	}
+
+	if originalData == override {
+		log.Debugf("target parameter file and marshaled data are the same, skipping commit.")
+		return nil, true
 	}
 
 	// Write the yaml
-	if err := kyaml.WriteFile(yCpy, path); err != nil {
-		return err
+	if err := os.WriteFile(path, []byte(override), 0600); err != nil {
+		return err, false
 	}
 
-	return nil
+	return nil, false
 }
 
 func imagesFilter(images v1alpha1.KustomizeImages) (kyaml.Filter, error) {
